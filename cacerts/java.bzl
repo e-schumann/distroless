@@ -27,7 +27,8 @@ def _impl(ctx):
 set -ex
 docker load -i {0}
 # Install the certs in the builder image.
-cid=$(docker run -d {1} sh -c "apt-get update && apt-get install -y -q ca-certificates-java")
+# ln: the default non-interactive shell is dash, which interferes with the post install script.
+cid=$(docker run -d {1} sh -c "ln -sf bash /bin/sh && apt-get update && apt-get install -y -q ca-certificates-java")
 docker attach $cid
 
 # Copy out the certs as a tarball
@@ -41,7 +42,7 @@ docker rm $cid
             builder_image_name,
             ctx.outputs.out.path)
     script = ctx.actions.declare_file("cacerts.build")
-    ctx.file_action(
+    ctx.actions.write(
         output=script,
         content=build_contents,
     )
@@ -58,9 +59,8 @@ docker rm $cid
 cacerts_java = rule(
     attrs = {
         "_builder_image": attr.label(
-            default = Label("@debian8//image:image.tar"),
-            allow_files = True,
-            single_file = True,
+            default = Label("@debian9//image:image.tar"),
+            allow_single_file = True,
         ),
     },
     executable = False,

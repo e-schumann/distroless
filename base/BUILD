@@ -11,14 +11,44 @@ load("@io_bazel_rules_go//go:def.bzl", "go_binary")
 passwd_entry(
     name = "root_user",
     gid = 0,
+    home = "/root",
+    info = "root",
+    shell = "/sbin/nologin",
     uid = 0,
     username = "root",
+)
+
+NOBODY = 65534
+
+NONROOT = 65532
+
+passwd_entry(
+    name = "nobody_user",
+    create_home = False,
+    gid = NOBODY,
+    home = "/nonexistent",
+    info = "nobody",
+    shell = "/sbin/nologin",
+    uid = NOBODY,
+    username = "nobody",
+)
+
+passwd_entry(
+    name = "nonroot_user",
+    gid = NONROOT,
+    home = "/home/nonroot",
+    info = "nonroot",
+    shell = "/sbin/nologin",
+    uid = NONROOT,
+    username = "nonroot",
 )
 
 passwd_tar(
     name = "passwd",
     entries = [
         ":root_user",
+        ":nobody_user",
+        ":nonroot_user",
     ],
     passwd_file_pkg_dir = "etc",
 )
@@ -28,6 +58,18 @@ group_entry(
     name = "root_group",
     gid = 0,
     groupname = "root",
+)
+
+group_entry(
+    name = "nobody_group",
+    gid = NOBODY,
+    groupname = "nobody",
+)
+
+group_entry(
+    name = "nonroot_group",
+    gid = NONROOT,
+    groupname = "nonroot",
 )
 
 group_entry(
@@ -46,8 +88,10 @@ group_file(
     name = "group",
     entries = [
         ":root_group",
+        ":nobody_group",
         ":tty_group",
         ":staff_group",
+        ":nonroot_group",
     ],
 )
 
@@ -59,7 +103,18 @@ pkg_tar(
 )
 
 load("@package_bundle//file:packages.bzl", "packages")
+load("@package_bundle_debian10//file:packages.bzl", packages_debian10 = "packages")
 load("//cacerts:cacerts.bzl", "cacerts")
+
+DISTRO_PACKAGES = {
+    "": packages,
+    "-debian10": packages_debian10,
+}
+
+DISTRO_REPOSITORY = {
+    "": "@debian_stretch",
+    "-debian10": "@debian10",
+}
 
 cacerts(
     name = "cacerts",
@@ -71,12 +126,12 @@ cacerts(
 # A tar is needed because at the moment there is no way to create a
 # directory with specific permissions.
 
-container_image(
-    name = "static",
+[container_image(
+    name = "static" + distro_suffix,
     debs = [
-        packages["base-files"],
-        packages["netbase"],
-        packages["tzdata"],
+        DISTRO_PACKAGES[distro_suffix]["base-files"],
+        DISTRO_PACKAGES[distro_suffix]["netbase"],
+        DISTRO_PACKAGES[distro_suffix]["tzdata"],
     ],
     env = {
         "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -90,29 +145,51 @@ container_image(
         ":group_tar",
         ":tmp.tar",
         ":nsswitch.tar",
-        "@debian_stretch//file:os_release.tar",
+        DISTRO_REPOSITORY[distro_suffix] + "//file:os_release.tar",
         ":cacerts.tar",
     ],
-)
+) for distro_suffix in ("", "-debian10")]
 
-container_image(
-    name = "base",
+[container_image(
+    name = "base" + distro_suffix,
     base = ":static",
     debs = [
-        packages["libc6"],
-        packages["libssl1.1"],
-        packages["openssl"],
+        DISTRO_PACKAGES[distro_suffix]["libc6"],
+        DISTRO_PACKAGES[distro_suffix]["libssl1.1"],
+        DISTRO_PACKAGES[distro_suffix]["openssl"],
     ],
-)
+) for distro_suffix in ("", "-debian10")]
 
 # A debug image with busybox available.
-container_image(
-    name = "debug",
+[container_image(
+    name = "debug" + distro_suffix,
     base = ":base",
     directory = "/",
     entrypoint = ["/busybox/sh"],
-    env = {"PATH": "$PATH:/busybox"},
+    env = {"PATH": "$$PATH:/busybox"},
     tars = ["//experimental/busybox:busybox.tar"],
+) for distro_suffix in ("", "-debian10")]
+
+# Non-root base images
+container_image(
+    name = "static-nonroot",
+    base = ":static",
+    user = "%d" % NONROOT,
+    workdir = "/home/nonroot",
+)
+
+container_image(
+    name = "base-nonroot",
+    base = ":base",
+    user = "%d" % NONROOT,
+    workdir = "/home/nonroot",
+)
+
+container_image(
+    name = "debug-nonroot",
+    base = ":debug",
+    user = "%d" % NONROOT,
+    workdir = "/home/nonroot",
 )
 
 container_test(
@@ -130,6 +207,8 @@ container_test(
 go_binary(
     name = "check_certs",
     srcs = ["testdata/check_certs.go"],
+    # Test image is linux based
+    goos = "linux",
     pure = "on",
 )
 
